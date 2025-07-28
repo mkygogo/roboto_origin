@@ -151,8 +151,15 @@ void Inference::inference() {
             std::transform(obs_.begin(), obs_.end(), obs_.begin(), [this](float val) {
                 return std::clamp(val, -clip_observations_, clip_observations_);
             });
-            hist_obs_.pop_front();
-            hist_obs_.push_back(obs_);
+            if (is_first_frame_) {
+                for (int i = 0; i < frame_stack_; i++) {
+                    hist_obs_.push_back(obs_);
+                }
+                is_first_frame_ = false;
+            } else {
+                hist_obs_.pop_front();
+                hist_obs_.push_back(obs_);
+            }
         }
         std::vector<float> input(78 * frame_stack_);
         for (int i = 0; i < frame_stack_; i++) {

@@ -30,6 +30,7 @@ class Inference : public rclcpp::Node {
         usd2urdf_.resize(23);
         last_output_.resize(23);
         step_ = 0;
+        is_first_frame_ = true;
 
         this->declare_parameter<std::string>("model_name", "1.onnx");
         this->declare_parameter<float>("act_alpha", 0.9);
@@ -138,9 +139,6 @@ class Inference : public rclcpp::Node {
                     usd2urdf_[12], usd2urdf_[13], usd2urdf_[14], usd2urdf_[15], usd2urdf_[16], usd2urdf_[17],
                     usd2urdf_[18], usd2urdf_[19], usd2urdf_[20], usd2urdf_[21], usd2urdf_[22]);
 
-        for (int i = 0; i < frame_stack_; i++) {
-            hist_obs_.push_back(std::vector<float>(78, 0.0f));  // 填充 frame_stack_ 个零向量
-        }
         env_ = Ort::Env(ORT_LOGGING_LEVEL_WARNING, "ONNXRuntimeInference");
         Ort::SessionOptions session_options;
         if (intra_threads_ > 0) {
@@ -224,6 +222,7 @@ class Inference : public rclcpp::Node {
     std::vector<long int> usd2urdf_;
     std::shared_mutex infer_mutex_;
     float last_roll_, last_pitch_, last_yaw_;
+    bool is_first_frame_;
 
     void subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Joy> msg);
     void subs_left_leg_callback(const std::shared_ptr<sensor_msgs::msg::JointState> msg);
