@@ -20,8 +20,8 @@ void Inference::subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Joy> m
         RCLCPP_INFO(this->get_logger(), "Inference paused");
     }
     if (msg->buttons[2] == 1) {
-        is_running_ = !is_running_;
-        RCLCPP_INFO(this->get_logger(), is_running_ ? "Inference started" : "Inference paused");
+        is_running_ = true;
+        RCLCPP_INFO("Inference started");
     }
     if (msg->buttons[3] == 1) {
         is_running_ = false;
@@ -228,7 +228,7 @@ void Inference::inference() {
 int main(int argc, char **argv) {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<Inference>();
-    RCLCPP_INFO(node->get_logger(), "Press 'B' to start/pause inference");
+    RCLCPP_INFO(node->get_logger(), "Press 'B' to start inference");
     rclcpp::spin(node);
     rclcpp::shutdown();
     return 0;
