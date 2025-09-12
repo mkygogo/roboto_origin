@@ -1,15 +1,15 @@
 #include "inference_node.hpp"
 
 void InferenceNode::subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Joy> msg) {
-    std::unique_lock lock(infer_mutex_);
-    vx_ = msg->axes[3] * 0.3;
-    vy_ = msg->axes[2] * 0.3;
+    auto data = std::atomic_load(&write_buffer_); // 原子加载
+    data->vx = msg->axes[3] * 0.3;
+    data->vy = msg->axes[2] * 0.3;
     if (msg->buttons[6] == 1) {
-        dyaw_ = msg->buttons[6] * 0.8;
+        data->dyaw = msg->buttons[6] * 0.8;
     } else if (msg->buttons[7] == 1) {
-        dyaw_ = -msg->buttons[7] * 0.8;
+        data->dyaw = -msg->buttons[7] * 0.8;
     } else {
-        dyaw_ = 0.0;
+        data->dyaw = 0.0;
     }
     if (msg->buttons[0] == 1) {
         is_running_ = false;
@@ -30,66 +30,66 @@ void InferenceNode::subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Jo
 }
 
 void InferenceNode::subs_left_leg_callback(const std::shared_ptr<sensor_msgs::msg::JointState> msg) {
-    std::unique_lock lock(infer_mutex_);
+    auto data = std::atomic_load(&write_buffer_); // 原子加载
     for (int i = 0; i < 6; i++) {
         if (msg->position[i] > joint_limits_upper_[i] || msg->position[i] < joint_limits_lower_[i]){
             is_running_ = false;
             RCLCPP_WARN(this->get_logger(), "Left leg joint %d out of limits, inference paused!", i+1);
             return;
         }
-        left_leg_obs_[i] = msg->position[i];
-        left_leg_obs_[6 + i] = msg->velocity[i];
+        data->left_leg_obs[i] = msg->position[i];
+        data->left_leg_obs[6 + i] = msg->velocity[i];
     }
 }
 
 void InferenceNode::subs_right_leg_callback(const std::shared_ptr<sensor_msgs::msg::JointState> msg) {
-    std::unique_lock lock(infer_mutex_);
+    auto data = std::atomic_load(&write_buffer_); // 原子加载
     for (int i = 0; i < 7; i++) {
         if (msg->position[i] > joint_limits_upper_[6+i] || msg->position[i] < joint_limits_lower_[6+i]){
             is_running_ = false;
             RCLCPP_WARN(this->get_logger(), "Right leg joint %d out of limits, inference paused!", i+1);
             return;
         }
-        right_leg_obs_[i] = msg->position[i];
-        right_leg_obs_[7 + i] = msg->velocity[i];
+        data->right_leg_obs[i] = msg->position[i];
+        data->right_leg_obs[7 + i] = msg->velocity[i];
     }
 }
 
 void InferenceNode::subs_left_arm_callback(const std::shared_ptr<sensor_msgs::msg::JointState> msg) {
-    std::unique_lock lock(infer_mutex_);
+    auto data = std::atomic_load(&write_buffer_); // 原子加载
     for (int i = 0; i < 5; i++) {
         if (msg->position[i] > joint_limits_upper_[13+i] || msg->position[i] < joint_limits_lower_[13+i]){
             is_running_ = false;
             RCLCPP_WARN(this->get_logger(), "Left arm joint %d out of limits, inference paused!", i+1);
             return;
         }
-        left_arm_obs_[i] = msg->position[i];
-        left_arm_obs_[5 + i] = msg->velocity[i];
+        data->left_arm_obs[i] = msg->position[i];
+        data->left_arm_obs[5 + i] = msg->velocity[i];
     }
 }
 
 void InferenceNode::subs_right_arm_callback(const std::shared_ptr<sensor_msgs::msg::JointState> msg) {
-    std::unique_lock lock(infer_mutex_);
+    auto data = std::atomic_load(&write_buffer_); // 原子加载
     for (int i = 0; i < 5; i++) {
         if (msg->position[i] > joint_limits_upper_[18+i] || msg->position[i] < joint_limits_lower_[18+i]){
             is_running_ = false;
             RCLCPP_WARN(this->get_logger(), "Right arm joint %d out of limits, inference paused!", i+1);
             return;
         }
-        right_arm_obs_[i] = msg->position[i];
-        right_arm_obs_[5 + i] = msg->velocity[i];
+        data->right_arm_obs[i] = msg->position[i];
+        data->right_arm_obs[5 + i] = msg->velocity[i];
     }
 }
 
 void InferenceNode::subs_IMU_callback(const std::shared_ptr<sensor_msgs::msg::Imu> msg) {
-    std::unique_lock lock(infer_mutex_);
-    imu_obs_[0] = msg->orientation.w;
-    imu_obs_[1] = msg->orientation.x;
-    imu_obs_[2] = msg->orientation.y;
-    imu_obs_[3] = msg->orientation.z;
-    imu_obs_[4] = gyro_alpha_ * msg->angular_velocity.x + (1 - gyro_alpha_) * imu_obs_[4];
-    imu_obs_[5] = gyro_alpha_ * msg->angular_velocity.y + (1 - gyro_alpha_) * imu_obs_[5];
-    imu_obs_[6] = gyro_alpha_ * msg->angular_velocity.z + (1 - gyro_alpha_) * imu_obs_[6];
+    auto data = std::atomic_load(&write_buffer_); // 原子加载
+    data->imu_obs[0] = msg->orientation.w;
+    data->imu_obs[1] = msg->orientation.x;
+    data->imu_obs[2] = msg->orientation.y;
+    data->imu_obs[3] = msg->orientation.z;
+    data->imu_obs[4] = gyro_alpha_ * msg->angular_velocity.x + (1 - gyro_alpha_) * data->imu_obs[4];
+    data->imu_obs[5] = gyro_alpha_ * msg->angular_velocity.y + (1 - gyro_alpha_) * data->imu_obs[5];
+    data->imu_obs[6] = gyro_alpha_ * msg->angular_velocity.z + (1 - gyro_alpha_) * data->imu_obs[6];
 }
 
 void InferenceNode::publish_joint_states() {
@@ -126,12 +126,12 @@ void InferenceNode::publish_joint_states() {
     right_arm_publisher_->publish(right_arm_message);
 }
 
-void InferenceNode::get_gravity_b() {
+void InferenceNode::get_gravity_b(const SensorData& data) {
     float w, x, y, z;
-    w = imu_obs_[0];
-    x = imu_obs_[1];
-    y = imu_obs_[2];
-    z = imu_obs_[3];
+    w = data.imu_obs[0];
+    x = data.imu_obs[1];
+    y = data.imu_obs[2];
+    z = data.imu_obs[3];
 
     Eigen::Quaternionf q_b2w(w, x, y, z);
     Eigen::Vector3f gravity_w(0.0f, 0.0f, -1.0f);
@@ -159,33 +159,34 @@ void InferenceNode::inference() {
     }
     if (step_ % decimation_ == 0) {
         {
-            std::shared_lock lock(infer_mutex_);
+            auto new_write_buffer = std::make_shared<SensorData>();
+            auto read_buffer = std::atomic_exchange(&write_buffer_, new_write_buffer);
             for (int i = 0; i < 3; i++) {
-                obs_[i] = imu_obs_[4 + i] * obs_scales_ang_vel_;
+                obs_[i] = read_buffer->imu_obs[4 + i] * obs_scales_ang_vel_;
             }
-            get_gravity_b();
-            obs_[6] = vx_ * obs_scales_lin_vel_;
-            obs_[7] = vy_ * obs_scales_lin_vel_;
-            obs_[8] = dyaw_ * obs_scales_ang_vel_;
+            get_gravity_b(*read_buffer);
+            obs_[6] = read_buffer->vx * obs_scales_lin_vel_;
+            obs_[7] = read_buffer->vy * obs_scales_lin_vel_;
+            obs_[8] = read_buffer->dyaw * obs_scales_ang_vel_;
             // RCLCPP_INFO(this->get_logger(), "obs_[4]: %f", obs_[4]);
 
             std::vector<float> joint_obs;
             joint_obs.resize(46);
             for (int i = 0; i < 6; i++) {
-                joint_obs[i] = left_leg_obs_[i] * obs_scales_dof_pos_;
-                joint_obs[23 + i] = left_leg_obs_[6 + i] * obs_scales_dof_vel_;
+                joint_obs[i] = read_buffer->left_leg_obs[i] * obs_scales_dof_pos_;
+                joint_obs[23 + i] = read_buffer->left_leg_obs[6 + i] * obs_scales_dof_vel_;
             }
             for (int i = 0; i < 7; i++) {
-                joint_obs[6 + i] = right_leg_obs_[i] * obs_scales_dof_pos_;
-                joint_obs[29 + i] = right_leg_obs_[7 + i] * obs_scales_dof_vel_;
+                joint_obs[6 + i] = read_buffer->right_leg_obs[i] * obs_scales_dof_pos_;
+                joint_obs[29 + i] = read_buffer->right_leg_obs[7 + i] * obs_scales_dof_vel_;
             }
             for (int i = 0; i < 5; i++) {
-                joint_obs[13 + i] = left_arm_obs_[i] * obs_scales_dof_pos_;
-                joint_obs[36 + i] = left_arm_obs_[5 + i] * obs_scales_dof_vel_;
+                joint_obs[13 + i] = read_buffer->left_arm_obs[i] * obs_scales_dof_pos_;
+                joint_obs[36 + i] = read_buffer->left_arm_obs[5 + i] * obs_scales_dof_vel_;
             }
             for (int i = 0; i < 5; i++) {
-                joint_obs[18 + i] = right_arm_obs_[i] * obs_scales_dof_pos_;
-                joint_obs[41 + i] = right_arm_obs_[5 + i] * obs_scales_dof_vel_;
+                joint_obs[18 + i] = read_buffer->right_arm_obs[i] * obs_scales_dof_pos_;
+                joint_obs[41 + i] = read_buffer->right_arm_obs[5 + i] * obs_scales_dof_vel_;
             }
             for (int i = 0; i < 23; i++) {
                 obs_[9 + i] = joint_obs[usd2urdf_[i]];
@@ -208,6 +209,7 @@ void InferenceNode::inference() {
                 hist_obs_.push_back(obs_);
             }
         }
+        // auto start_time = std::chrono::high_resolution_clock::now();
         std::vector<float> input(78 * frame_stack_);
         for (int i = 0; i < frame_stack_; i++) {
             std::copy(hist_obs_[i].begin(), hist_obs_[i].end(), input.begin() + i * 78);
@@ -234,6 +236,9 @@ void InferenceNode::inference() {
             size_t count = tensor.GetTensorTypeAndShapeInfo().GetElementCount();
             output.insert(output.end(), data, data + count);
         }
+        // auto end_time = std::chrono::high_resolution_clock::now();
+        // auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end_time - start_time);
+        // RCLCPP_INFO(this->get_logger(), "Inference took %lld ns.", duration.count());
         act_.resize(output.size());
         for (int i = 0; i < output.size(); i++) {
             output[i] = std::clamp(output[i], -clip_actions_, clip_actions_);

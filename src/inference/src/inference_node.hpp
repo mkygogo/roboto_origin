@@ -1,9 +1,12 @@
 #include <onnxruntime_cxx_api.h>
 #include <string.h>
 
+#include <atomic>
+#include <memory>
 #include <Eigen/Geometry>
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <filesystem>
 #include <iostream>
 #include <queue>
@@ -16,15 +19,12 @@
 class InferenceNode : public rclcpp::Node {
    public:
     InferenceNode() : Node("inference_node") {
+        auto initial_data = std::make_shared<SensorData>();
+        initial_data->imu_obs[0] = 1.0;
+        std::atomic_store(&write_buffer_, initial_data);
         obs_.resize(78);
         act_.resize(23);
         last_act_.resize(23);
-        left_leg_obs_.resize(12);
-        right_leg_obs_.resize(14);
-        left_arm_obs_.resize(10);
-        right_arm_obs_.resize(10);
-        imu_obs_.resize(7);
-        imu_obs_[0] = 1.0, imu_obs_[1] = 0.0, imu_obs_[2] = 0.0, imu_obs_[3] = 0.0;
         usd2urdf_.resize(23);
         last_output_.resize(23);
         step_ = 0;
@@ -41,9 +41,6 @@ class InferenceNode : public rclcpp::Node {
         this->declare_parameter<int>("frame_stack", 15);
         this->declare_parameter<int>("decimation", 10);
         this->declare_parameter<float>("dt", 0.001);
-        this->declare_parameter<float>("vx", 0.0);
-        this->declare_parameter<float>("vy", 0.0);
-        this->declare_parameter<float>("dyaw", 0.0);
         this->declare_parameter<float>("obs_scales_lin_vel", 1.0);
         this->declare_parameter<float>("obs_scales_ang_vel", 1.0);
         this->declare_parameter<float>("obs_scales_dof_pos", 1.0);
@@ -64,9 +61,6 @@ class InferenceNode : public rclcpp::Node {
         this->get_parameter("frame_stack", frame_stack_);
         this->get_parameter("decimation", decimation_);
         this->get_parameter("dt", dt_);
-        this->get_parameter("vx", vx_);
-        this->get_parameter("vy", vy_);
-        this->get_parameter("dyaw", dyaw_);
         this->get_parameter("obs_scales_lin_vel", obs_scales_lin_vel_);
         this->get_parameter("obs_scales_ang_vel", obs_scales_ang_vel_);
         this->get_parameter("obs_scales_dof_pos", obs_scales_dof_pos_);
@@ -86,9 +80,6 @@ class InferenceNode : public rclcpp::Node {
         RCLCPP_INFO(this->get_logger(), "frame_stack: %d", frame_stack_);
         RCLCPP_INFO(this->get_logger(), "decimation: %d", decimation_);
         RCLCPP_INFO(this->get_logger(), "dt: %f", dt_);
-        RCLCPP_INFO(this->get_logger(), "vx: %f", vx_);
-        RCLCPP_INFO(this->get_logger(), "vy: %f", vy_);
-        RCLCPP_INFO(this->get_logger(), "dyaw: %f", dyaw_);
         RCLCPP_INFO(this->get_logger(), "obs_scales_lin_vel: %f", obs_scales_lin_vel_);
         RCLCPP_INFO(this->get_logger(), "obs_scales_ang_vel: %f", obs_scales_ang_vel_);
         RCLCPP_INFO(this->get_logger(), "obs_scales_dof_pos: %f", obs_scales_dof_pos_);
@@ -158,6 +149,15 @@ class InferenceNode : public rclcpp::Node {
     ~InferenceNode() {}
 
    private:
+   struct SensorData {
+        float vx = 0.0, vy = 0.0, dyaw = 0.0;
+        std::vector<float> left_leg_obs = std::vector<float>(12, 0.0);
+        std::vector<float> right_leg_obs = std::vector<float>(14, 0.0);
+        std::vector<float> left_arm_obs = std::vector<float>(10, 0.0);
+        std::vector<float> right_arm_obs = std::vector<float>(10, 0.0);
+        std::vector<float> imu_obs = std::vector<float>(7, 0.0);
+    };
+    std::shared_ptr<SensorData> write_buffer_;
     bool is_running_ = false;
     std::string model_name_, model_path_;
     int frame_stack_;
@@ -180,14 +180,11 @@ class InferenceNode : public rclcpp::Node {
     std::vector<float> obs_, act_, last_act_, last_output_;
     float act_alpha_, gyro_alpha_, angle_alpha_;
     std::deque<std::vector<float>> hist_obs_;
-    std::vector<float> left_leg_obs_, right_leg_obs_, left_arm_obs_, right_arm_obs_, imu_obs_;
     float dt_;
-    float vx_, vy_, dyaw_;
     float obs_scales_lin_vel_, obs_scales_ang_vel_, obs_scales_dof_pos_, obs_scales_dof_vel_,
         obs_scales_gravity_b_, clip_observations_;
     float action_scale_, clip_actions_;
     std::vector<long int> usd2urdf_;
-    std::shared_mutex infer_mutex_;
     float last_roll_, last_pitch_, last_yaw_;
     bool is_first_frame_;
     std::vector<float> joint_limits_lower_, joint_limits_upper_;
@@ -200,6 +197,6 @@ class InferenceNode : public rclcpp::Node {
     void subs_right_arm_callback(const std::shared_ptr<sensor_msgs::msg::JointState> msg);
     void subs_IMU_callback(const std::shared_ptr<sensor_msgs::msg::Imu> msg);
     void publish_joint_states();
-    void get_gravity_b();
+    void get_gravity_b(const SensorData& data);
     void inference();
 };
