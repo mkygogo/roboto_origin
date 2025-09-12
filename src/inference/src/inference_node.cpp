@@ -21,7 +21,7 @@ void Inference::subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Joy> m
     }
     if (msg->buttons[2] == 1) {
         is_running_ = true;
-        RCLCPP_INFO("Inference started");
+        RCLCPP_INFO(this->get_logger(), "Inference started");
     }
     if (msg->buttons[3] == 1) {
         is_running_ = false;
@@ -32,6 +32,11 @@ void Inference::subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Joy> m
 void Inference::subs_left_leg_callback(const std::shared_ptr<sensor_msgs::msg::JointState> msg) {
     std::unique_lock lock(infer_mutex_);
     for (int i = 0; i < 6; i++) {
+        if (msg->position[i] > joint_limits_upper_[i] || msg->position[i] < joint_limits_lower_[i]){
+            is_running_ = false;
+            RCLCPP_WARN(this->get_logger(), "Left leg joint %d out of limits, inference paused!", i+1);
+            return;
+        }
         left_leg_obs_[i] = msg->position[i];
         left_leg_obs_[6 + i] = msg->velocity[i];
     }
@@ -40,6 +45,11 @@ void Inference::subs_left_leg_callback(const std::shared_ptr<sensor_msgs::msg::J
 void Inference::subs_right_leg_callback(const std::shared_ptr<sensor_msgs::msg::JointState> msg) {
     std::unique_lock lock(infer_mutex_);
     for (int i = 0; i < 7; i++) {
+        if (msg->position[i] > joint_limits_upper_[6+i] || msg->position[i] < joint_limits_lower_[6+i]){
+            is_running_ = false;
+            RCLCPP_WARN(this->get_logger(), "Right leg joint %d out of limits, inference paused!", i+1);
+            return;
+        }
         right_leg_obs_[i] = msg->position[i];
         right_leg_obs_[7 + i] = msg->velocity[i];
     }
@@ -48,6 +58,11 @@ void Inference::subs_right_leg_callback(const std::shared_ptr<sensor_msgs::msg::
 void Inference::subs_left_arm_callback(const std::shared_ptr<sensor_msgs::msg::JointState> msg) {
     std::unique_lock lock(infer_mutex_);
     for (int i = 0; i < 5; i++) {
+        if (msg->position[i] > joint_limits_upper_[13+i] || msg->position[i] < joint_limits_lower_[13+i]){
+            is_running_ = false;
+            RCLCPP_WARN(this->get_logger(), "Left arm joint %d out of limits, inference paused!", i+1);
+            return;
+        }
         left_arm_obs_[i] = msg->position[i];
         left_arm_obs_[5 + i] = msg->velocity[i];
     }
@@ -56,6 +71,11 @@ void Inference::subs_left_arm_callback(const std::shared_ptr<sensor_msgs::msg::J
 void Inference::subs_right_arm_callback(const std::shared_ptr<sensor_msgs::msg::JointState> msg) {
     std::unique_lock lock(infer_mutex_);
     for (int i = 0; i < 5; i++) {
+        if (msg->position[i] > joint_limits_upper_[18+i] || msg->position[i] < joint_limits_lower_[18+i]){
+            is_running_ = false;
+            RCLCPP_WARN(this->get_logger(), "Right arm joint %d out of limits, inference paused!", i+1);
+            return;
+        }
         right_arm_obs_[i] = msg->position[i];
         right_arm_obs_[5 + i] = msg->velocity[i];
     }
@@ -117,6 +137,11 @@ void Inference::get_gravity_b() {
     Eigen::Vector3f gravity_w(0.0f, 0.0f, -1.0f);
     Eigen::Quaternionf q_w2b = q_b2w.inverse();
     Eigen::Vector3f gravity_b = q_w2b * gravity_w;
+    if (gravity_b.z() > gravity_z_upper_){
+        is_running_ = false;
+        RCLCPP_WARN(this->get_logger(), "Robot fell down! Inference paused.");
+        return;
+    }
 
     obs_[3] = gravity_b.x() * obs_scales_gravity_b_;
     obs_[4] = gravity_b.y() * obs_scales_gravity_b_;

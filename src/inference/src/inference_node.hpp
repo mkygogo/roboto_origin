@@ -28,6 +28,9 @@ class Inference : public rclcpp::Node {
         usd2urdf_.resize(23);
         last_output_.resize(23);
         step_ = 0;
+        gravity_z_upper_ = -0.7;
+        joint_limits_lower_ = std::vector<float>{-1.0, -0.2, -1.0, -0.2, -0.6, -0.5, -0.2, -1.0, -1.0, -0.2, -0.6, -0.5, -3.14, -1.57, -0.25, -1.57, -0.6, -1.57, -1.57, -1.0, -1.57, -0.6, -1.57};
+        joint_limits_upper_ = std::vector<float>{0.2, 1.0, 1.0, 2.5, 0.6, 0.5, 1.0, 0.2, 1.0, 2.5, 0.6, 0.5, 3.14, 1.57, 1.0, 1.57, 1.57, 1.57, 1.57, 0.25, 1.57, 1.57, 1.57};
         is_first_frame_ = true;
 
         this->declare_parameter<std::string>("model_name", "1.onnx");
@@ -185,6 +188,8 @@ class Inference : public rclcpp::Node {
     std::shared_mutex infer_mutex_;
     float last_roll_, last_pitch_, last_yaw_;
     bool is_first_frame_;
+    std::vector<float> joint_limits_lower_, joint_limits_upper_;
+    float gravity_z_upper_;
 
     void subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Joy> msg);
     void subs_left_leg_callback(const std::shared_ptr<sensor_msgs::msg::JointState> msg);
