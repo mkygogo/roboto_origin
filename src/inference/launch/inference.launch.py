@@ -21,6 +21,7 @@ def generate_launch_description():
                 name="inference_node",
                 parameters=[config],
                 output="screen",
+                # prefix=["xterm -e gdb -ex run --args"],
             ),
         ]
     )
