@@ -43,6 +43,13 @@ void InferenceNode::subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Jo
         is_running_.store(!is_running_.load());
         RCLCPP_INFO(this->get_logger(), "Inference %s", is_running_.load() ? "started" : "paused");
     }
+    if (use_interrupt_) {
+        if (msg->buttons[4] == 1 && msg->buttons[4] != last_button4_) {
+            is_interrupt_.store(!is_interrupt_.load());
+            RCLCPP_INFO(this->get_logger(), "Interrupt mode %s", is_interrupt_.load() ? "enabled" : "disabled");
+        }
+        last_button4_ = msg->buttons[4];
+    }
     last_button0_ = msg->buttons[0];
     last_button1_ = msg->buttons[1];
     last_button2_ = msg->buttons[2];
@@ -137,21 +144,23 @@ void InferenceNode::publish_joint_states() {
     right_leg_message.effort = {0, 0, 0, 0, 0, 0, 0};
     right_leg_publisher_->publish(right_leg_message);
 
-    auto left_arm_message = sensor_msgs::msg::JointState();
-    left_arm_message.header.stamp = this->now();
-    left_arm_message.name = {"joint1", "joint2", "joint3", "joint4", "joint5"};
-    left_arm_message.position = {(*act)[13], (*act)[14], (*act)[15], (*act)[16], (*act)[17]};
-    left_arm_message.velocity = {0, 0, 0, 0, 0};
-    left_arm_message.effort = {0, 0, 0, 0, 0};
-    left_arm_publisher_->publish(left_arm_message);
+    if(!is_interrupt_.load()){
+        auto left_arm_message = sensor_msgs::msg::JointState();
+        left_arm_message.header.stamp = this->now();
+        left_arm_message.name = {"joint1", "joint2", "joint3", "joint4", "joint5"};
+        left_arm_message.position = {(*act)[13], (*act)[14], (*act)[15], (*act)[16], (*act)[17]};
+        left_arm_message.velocity = {0, 0, 0, 0, 0};
+        left_arm_message.effort = {0, 0, 0, 0, 0};
+        left_arm_publisher_->publish(left_arm_message);
 
-    auto right_arm_message = sensor_msgs::msg::JointState();
-    right_arm_message.header.stamp = this->now();
-    right_arm_message.name = {"joint1", "joint2", "joint3", "joint4", "joint5"};
-    right_arm_message.position = {(*act)[18], (*act)[19], (*act)[20], (*act)[21], (*act)[22]};
-    right_arm_message.velocity = {0, 0, 0, 0, 0};
-    right_arm_message.effort = {0, 0, 0, 0, 0};
-    right_arm_publisher_->publish(right_arm_message);
+        auto right_arm_message = sensor_msgs::msg::JointState();
+        right_arm_message.header.stamp = this->now();
+        right_arm_message.name = {"joint1", "joint2", "joint3", "joint4", "joint5"};
+        right_arm_message.position = {(*act)[18], (*act)[19], (*act)[20], (*act)[21], (*act)[22]};
+        right_arm_message.velocity = {0, 0, 0, 0, 0};
+        right_arm_message.effort = {0, 0, 0, 0, 0};
+        right_arm_publisher_->publish(right_arm_message);
+    }
 }
 
 void InferenceNode::get_gravity_b(const SensorData& data) {
@@ -178,9 +187,21 @@ void InferenceNode::get_gravity_b(const SensorData& data) {
     // RCLCPP_INFO(this->get_logger(), "gravity_b: %f %f %f", obs_[44], obs_[45], obs_[46]);
 }
 
+void InferenceNode::call_read_motors() {
+    auto request = std::make_shared<motors::srv::ReadMotors::Request>();
+    while (!read_motors_client_->wait_for_service(std::chrono::milliseconds(1000))) {
+        if (!rclcpp::ok()) {
+            RCLCPP_ERROR(this->get_logger(), "Interrupted while waiting for service.");
+            return;
+        }
+        RCLCPP_INFO(this->get_logger(), "Service not available, waiting...");
+    }
+    auto result = read_motors_client_->async_send_request(request);
+}
+
 void InferenceNode::inference() {
     pthread_setname_np(pthread_self(), "inference");
-    struct sched_param sp{}; sp.sched_priority = 70;
+    struct sched_param sp{}; sp.sched_priority = 65;
     pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp);
     auto period = std::chrono::microseconds(static_cast<long long>(dt_ * 1000 * 1000 * decimation_));
 
@@ -229,6 +250,11 @@ void InferenceNode::inference() {
         for (int i = 0; i < 23; i++) {
             obs_[55 + i] = last_output_[i];
         }
+
+        if (use_interrupt_){
+            obs_[78] = is_interrupt_.load() ? 1.0 : 0.0;
+        }
+
         std::transform(obs_.begin(), obs_.end(), obs_.begin(), [this](float val) {
             return std::clamp(val, -clip_observations_, clip_observations_);
         });
@@ -242,9 +268,9 @@ void InferenceNode::inference() {
             hist_obs_.push_back(obs_);
         }
 
-        std::vector<float> input(78 * frame_stack_);
+        std::vector<float> input(obs_num_ * frame_stack_);
         for (int i = 0; i < frame_stack_; i++) {
-            std::copy(hist_obs_[i].begin(), hist_obs_[i].end(), input.begin() + i * 78);
+            std::copy(hist_obs_[i].begin(), hist_obs_[i].end(), input.begin() + i * obs_num_);
         }
         auto memory_info = Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeCPU);
         std::vector<const char *> input_names_raw(num_inputs_);

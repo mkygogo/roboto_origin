@@ -1,7 +1,9 @@
 #include <onnxruntime_cxx_api.h>
 #include <string.h>
+#include <vector>
 
 #include <atomic>
+#include <condition_variable>
 #include <memory>
 #include <Eigen/Geometry>
 #include <algorithm>
@@ -15,7 +17,7 @@
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <sensor_msgs/msg/joy.hpp>
 #include <geometry_msgs/msg/twist.hpp>
-#include <vector>
+#include <motors/srv/read_motors.hpp>
 
 class InferenceNode : public rclcpp::Node {
    public:
@@ -24,7 +26,6 @@ class InferenceNode : public rclcpp::Node {
         write_buffer_->imu_obs[0] = 1.0;
         read_buffer_ = std::make_shared<SensorData>();
         read_buffer_->imu_obs[0] = 1.0;
-        obs_.resize(78);
         act_ = std::make_shared<std::vector<float>>(23);
         last_act_.resize(23);
         usd2urdf_.resize(23);
@@ -39,6 +40,8 @@ class InferenceNode : public rclcpp::Node {
         this->declare_parameter<float>("gyro_alpha", 0.9);
         this->declare_parameter<float>("angle_alpha", 0.9);
         this->declare_parameter<int>("intra_threads", -1);
+        this->declare_parameter<bool>("use_interrupt", false);
+        this->declare_parameter<int>("obs_num", 78);
         this->declare_parameter<int>("frame_stack", 15);
         this->declare_parameter<int>("decimation", 10);
         this->declare_parameter<float>("dt", 0.001);
@@ -59,6 +62,8 @@ class InferenceNode : public rclcpp::Node {
         this->get_parameter("gyro_alpha", gyro_alpha_);
         this->get_parameter("angle_alpha", angle_alpha_);
         this->get_parameter("intra_threads", intra_threads_);
+        this->get_parameter("use_interrupt", use_interrupt_);
+        this->get_parameter("obs_num", obs_num_);
         this->get_parameter("frame_stack", frame_stack_);
         this->get_parameter("decimation", decimation_);
         this->get_parameter("dt", dt_);
@@ -78,6 +83,8 @@ class InferenceNode : public rclcpp::Node {
         RCLCPP_INFO(this->get_logger(), "gyro_alpha: %f", gyro_alpha_);
         RCLCPP_INFO(this->get_logger(), "angle_alpha: %f", angle_alpha_);
         RCLCPP_INFO(this->get_logger(), "intra_threads: %d", intra_threads_);
+        RCLCPP_INFO(this->get_logger(), "use_interrupt: %s", use_interrupt_ ? "true" : "false");
+        RCLCPP_INFO(this->get_logger(), "obs_num: %d", obs_num_);
         RCLCPP_INFO(this->get_logger(), "frame_stack: %d", frame_stack_);
         RCLCPP_INFO(this->get_logger(), "decimation: %d", decimation_);
         RCLCPP_INFO(this->get_logger(), "dt: %f", dt_);
@@ -95,9 +102,8 @@ class InferenceNode : public rclcpp::Node {
                     usd2urdf_[6], usd2urdf_[7], usd2urdf_[8], usd2urdf_[9], usd2urdf_[10], usd2urdf_[11],
                     usd2urdf_[12], usd2urdf_[13], usd2urdf_[14], usd2urdf_[15], usd2urdf_[16], usd2urdf_[17],
                     usd2urdf_[18], usd2urdf_[19], usd2urdf_[20], usd2urdf_[21], usd2urdf_[22]);
-        
+        obs_.resize(obs_num_);
         Ort::ThreadingOptions thread_opts;
-        thread_opts.SetGlobalSpinControl(false);
         if (intra_threads_ > 0) {
             thread_opts.SetGlobalIntraOpNumThreads(intra_threads_);
         }
@@ -145,6 +151,7 @@ class InferenceNode : public rclcpp::Node {
         cmd_subscription_ = this->create_subscription<geometry_msgs::msg::Twist>(
             "/cmd_vel", sensor_data_qos, std::bind(&InferenceNode::subs_cmd_callback,this, std::placeholders::_1
         ));
+        read_motors_client_ = this->create_client<motors::srv::ReadMotors>("read_motors");
         left_leg_publisher_ =
             this->create_publisher<sensor_msgs::msg::JointState>("/joint_command_left_leg", control_command_qos);
         right_leg_publisher_ =
@@ -173,9 +180,10 @@ class InferenceNode : public rclcpp::Node {
         std::vector<float> imu_obs = std::vector<float>(7, 0.0);
     };
     std::shared_ptr<SensorData> write_buffer_, read_buffer_;
-    std::atomic<bool> is_running_{false}, is_joy_control_{true};
+    std::atomic<bool> is_running_{false}, is_joy_control_{true}, is_interrupt_{false};
     std::string model_name_, model_path_;
-    int frame_stack_;
+    bool use_interrupt_;
+    int obs_num_, frame_stack_;
     int decimation_;
     std::unique_ptr<Ort::Env> env_;
     std::unique_ptr<Ort::Session> session_;
@@ -205,7 +213,8 @@ class InferenceNode : public rclcpp::Node {
     bool is_first_frame_;
     std::vector<float> joint_limits_lower_, joint_limits_upper_;
     float gravity_z_upper_;
-    int last_button0_ = 0, last_button1_ = 0, last_button2_ = 0, last_button3_ = 0;
+    int last_button0_ = 0, last_button1_ = 0, last_button2_ = 0, last_button3_ = 0, last_button4_ = 0;
+    rclcpp::Client<motors::srv::ReadMotors>::SharedPtr read_motors_client_;
 
     void subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Joy> msg);
     void subs_left_leg_callback(const std::shared_ptr<sensor_msgs::msg::JointState> msg);
@@ -217,4 +226,5 @@ class InferenceNode : public rclcpp::Node {
     void publish_joint_states();
     void get_gravity_b(const SensorData& data);
     void inference();
+    void call_read_motors();
 };
