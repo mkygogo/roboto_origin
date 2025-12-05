@@ -1,5 +1,29 @@
 #include "inference_node.hpp"
 
+void InferenceNode::reset() {
+    is_running_.store(false);
+    hist_obs_.clear();
+    std::fill(obs_.begin(), obs_.end(), 0.0f);
+    std::fill(joint_obs_.begin(), joint_obs_.end(), 0.0f);
+    std::fill(motion_pos_.begin(), motion_pos_.end(), 0.0f);
+    std::fill(motion_vel_.begin(), motion_vel_.end(), 0.0f);
+    std::fill(input_.begin(), input_.end(), 0.0f);
+    std::fill(output_.begin(), output_.end(), 0.0f);
+    std::fill(last_act_.begin(), last_act_.end(), 0.0f);
+    auto new_act = std::make_shared<std::vector<float>>(joint_num_, 0.0);
+    auto new_tmp_act = std::make_shared<std::vector<float>>(joint_num_, 0.0);
+    std::atomic_store(&act_, new_act);
+    std::atomic_store(&tmp_act_, new_tmp_act);
+    auto new_write_buffer = std::make_shared<SensorData>();
+    new_write_buffer->imu_obs[0] = 1.0;
+    std::atomic_store(&write_buffer_, new_write_buffer);
+    auto new_tmp_data = std::make_shared<SensorData>();
+    new_tmp_data->imu_obs[0] = 1.0;
+    std::atomic_store(&tmp_data_, new_tmp_data);
+    is_first_frame_ = true;
+    motion_frame_ = 0;
+}
+
 void InferenceNode::subs_cmd_callback(const std::shared_ptr<geometry_msgs::msg::Twist> msg){
     if(!is_joy_control_){
         auto data = std::atomic_load(&write_buffer_); // 原子加载
@@ -23,16 +47,7 @@ void InferenceNode::subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Jo
         }
     }
     if ((msg->buttons[0] == 1 && msg->buttons[0] != last_button0_) || (msg->buttons[1] == 1 && msg->buttons[1] != last_button1_) || (msg->buttons[3] == 1 && msg->buttons[3] != last_button3_)) {
-        is_running_.store(false);
-        hist_obs_.clear();
-        last_output_ = std::vector<float>(23, 0.0);
-        last_act_ = std::vector<float>(23, 0.0);
-        act_ = std::make_shared<std::vector<float>>(23, 0.0);
-        write_buffer_ = std::make_shared<SensorData>();
-        write_buffer_->imu_obs[0] = 1.0;
-        read_buffer_ = std::make_shared<SensorData>();
-        read_buffer_->imu_obs[0] = 1.0;
-        is_first_frame_ = true;
+        reset();
         RCLCPP_INFO(this->get_logger(), "Inference paused");
         if (msg->buttons[3] == 1){
             is_joy_control_.store(!is_joy_control_);
@@ -163,7 +178,7 @@ void InferenceNode::publish_joint_states() {
     }
 }
 
-void InferenceNode::get_gravity_b(const SensorData& data) {
+void InferenceNode::get_gravity_b(const SensorData& data, int offset) {
     float w, x, y, z;
     w = data.imu_obs[0];
     x = data.imu_obs[1];
@@ -180,23 +195,9 @@ void InferenceNode::get_gravity_b(const SensorData& data) {
         return;
     }
 
-    obs_[3] = gravity_b.x() * obs_scales_gravity_b_;
-    obs_[4] = gravity_b.y() * obs_scales_gravity_b_;
-    obs_[5] = gravity_b.z() * obs_scales_gravity_b_;
-
-    // RCLCPP_INFO(this->get_logger(), "gravity_b: %f %f %f", obs_[44], obs_[45], obs_[46]);
-}
-
-void InferenceNode::call_read_motors() {
-    auto request = std::make_shared<motors::srv::ReadMotors::Request>();
-    while (!read_motors_client_->wait_for_service(std::chrono::milliseconds(1000))) {
-        if (!rclcpp::ok()) {
-            RCLCPP_ERROR(this->get_logger(), "Interrupted while waiting for service.");
-            return;
-        }
-        RCLCPP_INFO(this->get_logger(), "Service not available, waiting...");
-    }
-    auto result = read_motors_client_->async_send_request(request);
+    obs_[0 + offset] = gravity_b.x() * obs_scales_gravity_b_;
+    obs_[1 + offset] = gravity_b.y() * obs_scales_gravity_b_;
+    obs_[2 + offset] = gravity_b.z() * obs_scales_gravity_b_;
 }
 
 void InferenceNode::inference() {
@@ -212,47 +213,68 @@ void InferenceNode::inference() {
             continue;
         }
 
-        write_buffer_ = std::atomic_exchange(&read_buffer_, write_buffer_);
-        auto data = std::atomic_load(&read_buffer_); 
+        write_buffer_ = std::atomic_exchange(&tmp_data_, write_buffer_);
+        
+        int offset = 0;
+
+        if(use_beyondmimic_){
+            motion_pos_ = motion_loader_->get_pos(motion_frame_);
+            motion_vel_ = motion_loader_->get_vel(motion_frame_);
+            motion_frame_ += 1;
+            if(motion_frame_ >= motion_loader_->get_num_frames()){
+                motion_frame_ = motion_loader_->get_num_frames() - 1;
+            }
+            for(int i = 0; i < joint_num_; i++){
+                obs_[i + offset] = motion_pos_[i];
+                obs_[i + joint_num_ + offset] = motion_vel_[i];
+            }
+            offset += joint_num_ * 2;
+        }
 
         for (int i = 0; i < 3; i++) {
-            obs_[i] = data->imu_obs[4 + i] * obs_scales_ang_vel_;
+            obs_[i + offset] = tmp_data_->imu_obs[4 + i] * obs_scales_ang_vel_;
         }
-        get_gravity_b(*data);
-        obs_[6] = data->vx * obs_scales_lin_vel_;
-        obs_[7] = data->vy * obs_scales_lin_vel_;
-        obs_[8] = data->dyaw * obs_scales_ang_vel_;
-        // RCLCPP_INFO(this->get_logger(), "obs_[4]: %f", obs_[4]);
+        offset += 3;
 
-        std::vector<float> joint_obs;
-        joint_obs.resize(46);
+        get_gravity_b(*tmp_data_, offset);
+        offset += 3;
+
+        if (!use_beyondmimic_){
+        obs_[0 + offset] = tmp_data_->vx * obs_scales_lin_vel_;
+        obs_[1 + offset] = tmp_data_->vy * obs_scales_lin_vel_;
+        obs_[2 + offset] = tmp_data_->dyaw * obs_scales_ang_vel_;
+        offset += 3;
+        }
+
         for (int i = 0; i < 6; i++) {
-            joint_obs[i] = data->left_leg_obs[i] * obs_scales_dof_pos_;
-            joint_obs[23 + i] = data->left_leg_obs[6 + i] * obs_scales_dof_vel_;
+            joint_obs_[i] = tmp_data_->left_leg_obs[i] * obs_scales_dof_pos_;
+            joint_obs_[joint_num_ + i] = tmp_data_->left_leg_obs[6 + i] * obs_scales_dof_vel_;
         }
         for (int i = 0; i < 7; i++) {
-            joint_obs[6 + i] = data->right_leg_obs[i] * obs_scales_dof_pos_;
-            joint_obs[29 + i] = data->right_leg_obs[7 + i] * obs_scales_dof_vel_;
+            joint_obs_[6 + i] = tmp_data_->right_leg_obs[i] * obs_scales_dof_pos_;
+            joint_obs_[joint_num_ + 6 + i] = tmp_data_->right_leg_obs[7 + i] * obs_scales_dof_vel_;
         }
         for (int i = 0; i < 5; i++) {
-            joint_obs[13 + i] = data->left_arm_obs[i] * obs_scales_dof_pos_;
-            joint_obs[36 + i] = data->left_arm_obs[5 + i] * obs_scales_dof_vel_;
+            joint_obs_[13 + i] = tmp_data_->left_arm_obs[i] * obs_scales_dof_pos_;
+            joint_obs_[joint_num_ + 13 + i] = tmp_data_->left_arm_obs[5 + i] * obs_scales_dof_vel_;
         }
         for (int i = 0; i < 5; i++) {
-            joint_obs[18 + i] = data->right_arm_obs[i] * obs_scales_dof_pos_;
-            joint_obs[41 + i] = data->right_arm_obs[5 + i] * obs_scales_dof_vel_;
+            joint_obs_[18 + i] = tmp_data_->right_arm_obs[i] * obs_scales_dof_pos_;
+            joint_obs_[joint_num_ + 18 + i] = tmp_data_->right_arm_obs[5 + i] * obs_scales_dof_vel_;
         }
-        for (int i = 0; i < 23; i++) {
-            obs_[9 + i] = joint_obs[usd2urdf_[i]];
-            obs_[32 + i] = joint_obs[23 + usd2urdf_[i]];
+        for (int i = 0; i < joint_num_; i++) {
+            obs_[offset + i] = joint_obs_[usd2urdf_[i]];
+            obs_[offset + joint_num_ + i] = joint_obs_[joint_num_ + usd2urdf_[i]];
         }
+        offset += joint_num_ * 2;
 
-        for (int i = 0; i < 23; i++) {
-            obs_[55 + i] = last_output_[i];
+        for (int i = 0; i < joint_num_; i++) {
+            obs_[offset + i] = output_[i];
         }
+        offset += joint_num_;
 
         if (use_interrupt_){
-            obs_[78] = is_interrupt_.load() ? 1.0 : 0.0;
+            obs_[offset] = is_interrupt_.load() ? 1.0 : 0.0;
         }
 
         std::transform(obs_.begin(), obs_.end(), obs_.begin(), [this](float val) {
@@ -268,41 +290,19 @@ void InferenceNode::inference() {
             hist_obs_.push_back(obs_);
         }
 
-        std::vector<float> input(obs_num_ * frame_stack_);
         for (int i = 0; i < frame_stack_; i++) {
-            std::copy(hist_obs_[i].begin(), hist_obs_[i].end(), input.begin() + i * obs_num_);
-        }
-        auto memory_info = Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeCPU);
-        std::vector<const char *> input_names_raw(num_inputs_);
-        for (size_t i = 0; i < num_inputs_; i++) {
-            input_names_raw[i] = input_names_[i].c_str();
-        }
-        std::vector<const char *> output_names_raw(num_outputs_);
-        for (size_t i = 0; i < num_outputs_; i++) {
-            output_names_raw[i] = output_names_[i].c_str();
-        }
-        Ort::Value input_tensor =
-            Ort::Value::CreateTensor<float>(memory_info, const_cast<float *>(input.data()), input.size(),
-                                            input_shape_.data(), input_shape_.size());
-
-        auto output_tensors = session_->Run(Ort::RunOptions{nullptr}, input_names_raw.data(), &input_tensor,
-                                            1, output_names_raw.data(), output_names_raw.size());
-
-        std::vector<float> output;
-        for (auto &tensor : output_tensors) {
-            float *data = tensor.GetTensorMutableData<float>();
-            size_t count = tensor.GetTensorTypeAndShapeInfo().GetElementCount();
-            output.insert(output.end(), data, data + count);
+            std::copy(hist_obs_[i].begin(), hist_obs_[i].end(), input_.begin() + i * obs_num_);
         }
 
-        auto new_act = std::make_shared<std::vector<float>>(output.size());
-        for (int i = 0; i < output.size(); i++) {
-            output[i] = std::clamp(output[i], -clip_actions_, clip_actions_);
-            (*new_act)[usd2urdf_[i]] = output[i];
-            (*new_act)[usd2urdf_[i]] = (*new_act)[usd2urdf_[i]] * action_scale_;
+        session_->Run(Ort::RunOptions{nullptr}, input_names_raw_.data(), input_tensor_.get(), 1,
+            output_names_raw_.data(), output_tensor_.get(), 1);
+
+        for (int i = 0; i < output_.size(); i++) {
+            output_[i] = std::clamp(output_[i], -clip_actions_, clip_actions_);
+            (*tmp_act_)[usd2urdf_[i]] = output_[i];
+            (*tmp_act_)[usd2urdf_[i]] = (*tmp_act_)[usd2urdf_[i]] * action_scale_;
         }
-        std::atomic_store(&act_, new_act);
-        last_output_ = output;
+        tmp_act_ = std::atomic_exchange(&act_, tmp_act_);
 
 
         auto loop_end = std::chrono::steady_clock::now();

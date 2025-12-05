@@ -1,12 +1,13 @@
 inference_node:
     ros__parameters:
-        use_interrupt: true
-        model_name: "policy_interrupt.onnx"
+        use_beyondmimic: true
+        motion_name: "motion.npz"
+        model_name: "policy_beyondmimic.onnx"
         act_alpha: 1.0
         gyro_alpha: 1.0
         angle_alpha: 1.0
-        obs_num: 79
-        frame_stack: 10
+        obs_num: 121
+        frame_stack: 1
         joint_num: 23
         decimation: 4
         intra_threads: 1

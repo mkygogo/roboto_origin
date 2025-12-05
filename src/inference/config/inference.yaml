@@ -4,9 +4,9 @@ inference_node:
         act_alpha: 1.0
         gyro_alpha: 1.0
         angle_alpha: 1.0
-        use_interrupt: false
         obs_num: 78
         frame_stack: 10
+        joint_num: 23
         decimation: 4
         intra_threads: 1
         dt: 0.005
