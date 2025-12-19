@@ -17,6 +17,7 @@
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <sensor_msgs/msg/joy.hpp>
 #include <geometry_msgs/msg/twist.hpp>
+#include <std_msgs/msg/float32_multi_array.hpp> 
 #include "motion_loader.hpp"
 
 class InferenceNode : public rclcpp::Node {
@@ -36,8 +37,10 @@ class InferenceNode : public rclcpp::Node {
         this->declare_parameter<int>("intra_threads", -1);
         this->declare_parameter<bool>("use_interrupt", false);
         this->declare_parameter<bool>("use_beyondmimic", false);
+        this->declare_parameter<bool>("use_attn_enc", false);
         this->declare_parameter<int>("obs_num", 78);
         this->declare_parameter<int>("motion_obs_num", 121);
+        this->declare_parameter<int>("perception_obs_num", 187);
         this->declare_parameter<int>("frame_stack", 15);
         this->declare_parameter<int>("motion_frame_stack", 1);
         this->declare_parameter<int>("joint_num", 23);
@@ -64,8 +67,10 @@ class InferenceNode : public rclcpp::Node {
         this->get_parameter("intra_threads", intra_threads_);
         this->get_parameter("use_interrupt", use_interrupt_);
         this->get_parameter("use_beyondmimic", use_beyondmimic_);
+        this->get_parameter("use_attn_enc", use_attn_enc_);
         this->get_parameter("obs_num", obs_num_);
         this->get_parameter("motion_obs_num", motion_obs_num_);
+        this->get_parameter("perception_obs_num", perception_obs_num_);
         this->get_parameter("frame_stack", frame_stack_);
         this->get_parameter("motion_frame_stack", motion_frame_stack_);
         this->get_parameter("joint_num", joint_num_);
@@ -118,7 +123,11 @@ class InferenceNode : public rclcpp::Node {
             thread_opts.SetGlobalIntraOpNumThreads(intra_threads_);
         }
         env_ = std::make_unique<Ort::Env>(thread_opts, ORT_LOGGING_LEVEL_WARNING, "ONNXRuntimeInference");
-        setup_model(normal_ctx_, model_path_, obs_num_ * frame_stack_);
+        if(use_attn_enc_){
+            setup_model(normal_ctx_, model_path_, obs_num_ * frame_stack_ + perception_obs_num_);
+        } else {
+            setup_model(normal_ctx_, model_path_, obs_num_ * frame_stack_);
+        }
         if(use_beyondmimic_){
              setup_model(motion_ctx_, motion_model_path_, motion_obs_num_ * motion_frame_stack_);
         }
@@ -140,10 +149,13 @@ class InferenceNode : public rclcpp::Node {
         act_ = std::make_shared<std::vector<float>>(joint_num_, 0.0);
         tmp_act_ = std::make_shared<std::vector<float>>(joint_num_, 0.0);
         last_act_ = std::vector<float>(joint_num_, 0.0);
-        write_buffer_ = std::make_shared<SensorData>();
+        write_buffer_ = std::make_shared<SensorData>(perception_obs_num_);
         write_buffer_->imu_obs[0] = 1.0;
-        tmp_data_ = std::make_shared<SensorData>();
+        tmp_data_ = std::make_shared<SensorData>(perception_obs_num_);
         tmp_data_->imu_obs[0] = 1.0;
+        if (use_attn_enc_){
+            perception_obs_ = std::vector<float>(perception_obs_num_, 0.0);
+        }
         reset();
 
         auto sensor_data_qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort().durability_volatile();
@@ -167,6 +179,9 @@ class InferenceNode : public rclcpp::Node {
         cmd_subscription_ = this->create_subscription<geometry_msgs::msg::Twist>(
             "/cmd_vel", sensor_data_qos, std::bind(&InferenceNode::subs_cmd_callback,this, std::placeholders::_1
         ));
+        elevation_subscription_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
+            "/elevation_map", sensor_data_qos,
+            std::bind(&InferenceNode::subs_elevation_callback, this, std::placeholders::_1));
         left_leg_publisher_ =
             this->create_publisher<sensor_msgs::msg::JointState>("/joint_command_left_leg", control_command_qos);
         right_leg_publisher_ =
@@ -185,12 +200,22 @@ class InferenceNode : public rclcpp::Node {
         }
     }
     struct SensorData {
+        SensorData(int elevation_num=0, int left_leg_num=12, int right_leg_num=14, int left_arm_num=10,
+             int right_arm_num=10, int imu_num=7)
+            : left_leg_obs(left_leg_num, 0.0),
+              right_leg_obs(right_leg_num, 0.0),
+              left_arm_obs(left_arm_num, 0.0),
+              right_arm_obs(right_arm_num, 0.0),
+              imu_obs(imu_num, 0.0),
+              elevation_obs(elevation_num, 0.0) {}
+
         float vx = 0.0, vy = 0.0, dyaw = 0.0;
-        std::vector<float> left_leg_obs = std::vector<float>(12, 0.0);
-        std::vector<float> right_leg_obs = std::vector<float>(14, 0.0);
-        std::vector<float> left_arm_obs = std::vector<float>(10, 0.0);
-        std::vector<float> right_arm_obs = std::vector<float>(10, 0.0);
-        std::vector<float> imu_obs = std::vector<float>(7, 0.0);
+        std::vector<float> left_leg_obs;
+        std::vector<float> right_leg_obs;
+        std::vector<float> left_arm_obs;
+        std::vector<float> right_arm_obs;
+        std::vector<float> imu_obs;
+        std::vector<float> elevation_obs;
     };
     struct ModelContext {
         std::unique_ptr<Ort::Session> session;
@@ -212,8 +237,8 @@ class InferenceNode : public rclcpp::Node {
     std::shared_ptr<SensorData> write_buffer_, tmp_data_;
     std::atomic<bool> is_running_{false}, is_joy_control_{true}, is_interrupt_{false}, is_beyondmimic_{false};
     std::string model_name_, model_path_, motion_name_, motion_path_, motion_model_name_, motion_model_path_;
-    bool use_interrupt_, use_beyondmimic_;
-    int obs_num_, motion_obs_num_, frame_stack_, motion_frame_stack_, joint_num_;
+    bool use_interrupt_, use_beyondmimic_, use_attn_enc_;
+    int obs_num_, motion_obs_num_, perception_obs_num_, frame_stack_, motion_frame_stack_, joint_num_;
     int decimation_;
     std::unique_ptr<Ort::Env> env_;
     int intra_threads_;
@@ -225,9 +250,10 @@ class InferenceNode : public rclcpp::Node {
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr  IMU_subscription_;
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_subscription_;
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_subscription_;
+    rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr elevation_subscription_;
     rclcpp::TimerBase::SharedPtr timer_pub_;
     std::thread inference_thread_;
-    std::vector<float> obs_, last_act_;
+    std::vector<float> obs_, last_act_, perception_obs_, motion_pos_, motion_vel_, joint_obs_;
     std::shared_ptr<std::vector<float>> act_, tmp_act_;
     float act_alpha_, gyro_alpha_, angle_alpha_;
     float dt_;
@@ -241,7 +267,6 @@ class InferenceNode : public rclcpp::Node {
     int last_button0_ = 0, last_button1_ = 0, last_button2_ = 0, last_button3_ = 0, last_button4_ = 0;
     std::shared_ptr<MotionLoader> motion_loader_;
     size_t motion_frame_ = 0;
-    std::vector <float> motion_pos_, motion_vel_, joint_obs_;
     std::vector<const char *> input_names_raw_, output_names_raw_;
     std::unique_ptr<ModelContext> normal_ctx_, motion_ctx_;
     ModelContext* active_ctx_;
@@ -253,6 +278,7 @@ class InferenceNode : public rclcpp::Node {
     void subs_right_arm_callback(const std::shared_ptr<sensor_msgs::msg::JointState> msg);
     void subs_IMU_callback(const std::shared_ptr<sensor_msgs::msg::Imu> msg);
     void subs_cmd_callback(const std::shared_ptr<geometry_msgs::msg::Twist> msg);
+    void subs_elevation_callback(const std::shared_ptr<std_msgs::msg::Float32MultiArray> msg);
     void publish_joint_states();
     void get_gravity_b(const SensorData& data, int offset);
     void inference();

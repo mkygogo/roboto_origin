@@ -69,16 +69,19 @@ void InferenceNode::reset() {
     auto new_tmp_act = std::make_shared<std::vector<float>>(joint_num_, 0.0);
     std::atomic_store(&act_, new_act);
     std::atomic_store(&tmp_act_, new_tmp_act);
-    auto new_write_buffer = std::make_shared<SensorData>();
+    auto new_write_buffer = std::make_shared<SensorData>(perception_obs_num_);
     new_write_buffer->imu_obs[0] = 1.0;
     std::atomic_store(&write_buffer_, new_write_buffer);
-    auto new_tmp_data = std::make_shared<SensorData>();
+    auto new_tmp_data = std::make_shared<SensorData>(perception_obs_num_);
     new_tmp_data->imu_obs[0] = 1.0;
     std::atomic_store(&tmp_data_, new_tmp_data);
     is_first_frame_ = true;
     motion_frame_ = 0;
     is_interrupt_.store(false);
     is_beyondmimic_.store(false);
+    if(use_attn_enc_){
+        std::fill(perception_obs_.begin(), perception_obs_.end(), 0.0f);
+    }
 }
 
 void InferenceNode::subs_cmd_callback(const std::shared_ptr<geometry_msgs::msg::Twist> msg){
@@ -212,6 +215,16 @@ void InferenceNode::subs_IMU_callback(const std::shared_ptr<sensor_msgs::msg::Im
     data->imu_obs[4] = gyro_alpha_ * msg->angular_velocity.x + (1 - gyro_alpha_) * data->imu_obs[4];
     data->imu_obs[5] = gyro_alpha_ * msg->angular_velocity.y + (1 - gyro_alpha_) * data->imu_obs[5];
     data->imu_obs[6] = gyro_alpha_ * msg->angular_velocity.z + (1 - gyro_alpha_) * data->imu_obs[6];
+}
+
+void InferenceNode::subs_elevation_callback(const std::shared_ptr<std_msgs::msg::Float32MultiArray> msg){
+    if(use_attn_enc_){
+        auto data = std::atomic_load(&write_buffer_); // 原子加载
+        std::vector<float>& elevation_obs = data->elevation_obs;
+        for(int i = 0; i < perception_obs_num_; i++){
+            elevation_obs[i] = msg->data[i];
+        }
+    }
 }
 
 void InferenceNode::publish_joint_states() {
@@ -357,6 +370,12 @@ void InferenceNode::inference() {
             obs_[offset] = is_interrupt_.load() ? 1.0 : 0.0;
         }
 
+        if (use_attn_enc_){
+            for(int i = 0; i < perception_obs_num_; i++){
+                perception_obs_[i] = tmp_data_->elevation_obs[i];
+            }
+        }
+
         std::transform(obs_.begin(), obs_.end(), obs_.begin(), [this](float val) {
             return std::clamp(val, -clip_observations_, clip_observations_);
         });
@@ -368,10 +387,16 @@ void InferenceNode::inference() {
             for (int i = 0; i < frame_stack; i++) {
                 std::copy(obs_.begin(), obs_.end(), active_ctx_->input_buffer.begin() + i * obs_num);
             }
+            if(use_attn_enc_){
+                std::copy(perception_obs_.begin(), perception_obs_.end(), active_ctx_->input_buffer.begin() + frame_stack * obs_num);
+            }
             is_first_frame_ = false;
         } else {
             std::copy(active_ctx_->input_buffer.begin() + obs_num, active_ctx_->input_buffer.end(), active_ctx_->input_buffer.begin());
             std::copy(obs_.begin(), obs_.end(), active_ctx_->input_buffer.end() - obs_num);
+            if(use_attn_enc_){
+                std::copy(perception_obs_.begin(), perception_obs_.end(), active_ctx_->input_buffer.begin() + frame_stack * obs_num);
+            }
         }
 
         active_ctx_->session->Run(Ort::RunOptions{nullptr}, 
