@@ -23,7 +23,6 @@
 class InferenceNode : public rclcpp::Node {
    public:
     InferenceNode() : Node("inference_node") {
-        usd2urdf_.resize(joint_num_);
         gravity_z_upper_ = -0.7;
         joint_limits_lower_ = std::vector<float>{-1.0,-0.6,-1.0+0.1,-0.2-0.3,-1.0+0.2,-0.5,-0.6,-1.0,-1.0+0.1,-0.2-0.3,-1.0+0.2,-0.5,-3.14,-3.14-0.18,-0.25-0.06,-1.57,-0.6-0.78,-1.57,-3.14-0.18,-3.14+0.06,-1.57,-0.6-0.78,-1.57};
         joint_limits_upper_ = std::vector<float>{ 0.6, 1.0, 1.0+0.1, 2.5-0.3, 1.0+0.2, 0.5, 1.0, 0.6, 1.0+0.1, 2.5-0.3, 1.0+0.2, 0.5, 3.14, 1.57-0.18, 3.14-0.06, 1.57,1.57-0.78, 1.57, 1.57-0.18, 0.25+0.06, 1.57,1.57-0.78, 1.57};
@@ -84,6 +83,7 @@ class InferenceNode : public rclcpp::Node {
         this->get_parameter("clip_observations", clip_observations_);
         this->get_parameter("action_scale", action_scale_);
         this->get_parameter("clip_actions", clip_actions_);
+        usd2urdf_.resize(joint_num_);
         this->get_parameter("usd2urdf", usd2urdf_);
 
         model_path_ = std::string(ROOT_DIR) + "models/" + model_name_;
@@ -180,7 +180,7 @@ class InferenceNode : public rclcpp::Node {
             "/cmd_vel", sensor_data_qos, std::bind(&InferenceNode::subs_cmd_callback,this, std::placeholders::_1
         ));
         elevation_subscription_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
-            "/elevation_map", sensor_data_qos,
+            "/robot_0/elevation_data", sensor_data_qos,
             std::bind(&InferenceNode::subs_elevation_callback, this, std::placeholders::_1));
         left_leg_publisher_ =
             this->create_publisher<sensor_msgs::msg::JointState>("/joint_command_left_leg", control_command_qos);

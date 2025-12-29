@@ -392,8 +392,8 @@ void InferenceNode::inference() {
             }
             is_first_frame_ = false;
         } else {
-            std::copy(active_ctx_->input_buffer.begin() + obs_num, active_ctx_->input_buffer.end(), active_ctx_->input_buffer.begin());
-            std::copy(obs_.begin(), obs_.end(), active_ctx_->input_buffer.end() - obs_num);
+            std::copy(active_ctx_->input_buffer.begin() + obs_num, active_ctx_->input_buffer.begin() + frame_stack * obs_num, active_ctx_->input_buffer.begin());
+            std::copy(obs_.begin(), obs_.end(), active_ctx_->input_buffer.begin() + (frame_stack - 1) * obs_num);
             if(use_attn_enc_){
                 std::copy(perception_obs_.begin(), perception_obs_.end(), active_ctx_->input_buffer.begin() + frame_stack * obs_num);
             }
