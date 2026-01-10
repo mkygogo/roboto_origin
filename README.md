@@ -48,12 +48,13 @@ pip install -e .
 cd ..
 cd rsl_rl
 pip install -e .
+cd ..
 ```
 
 - Verify that the extension is correctly installed by running the following command to print all the available environments in the extension:
 
 ```bash
-python scripts/tools/list_envs.py
+python robolab/scripts/tools/list_envs.py
 ```
 
 ## Usage

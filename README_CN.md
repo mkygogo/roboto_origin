@@ -53,7 +53,7 @@ pip install -e .
 - 通过运行以下命令验证扩展是否正确安装，打印可用环境列表：
 
 ```bash
-python scripts/tools/list_envs.py
+python robolab/scripts/tools/list_envs.py
 ```
 
 ## 用法
