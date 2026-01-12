@@ -10,6 +10,3 @@
 # with modifications by RoboLab Project (BSD-3-Clause license).
 
 import os
-from .tasks import *
-
-ROBOLAB_ROOT_DIR = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))

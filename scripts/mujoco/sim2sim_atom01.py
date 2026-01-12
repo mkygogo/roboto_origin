@@ -33,7 +33,7 @@ import mujoco, mujoco_viewer
 from tqdm import tqdm
 from collections import deque
 from scipy.spatial.transform import Rotation as R
-from robolab import ROBOLAB_ROOT_DIR
+from robolab.assets import ISAAC_DATA_DIR
 import torch
 import os
 import cv2
@@ -299,8 +299,7 @@ if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser(description='Deployment script.')
-    parser.add_argument('--load_model', type=str, default=f'{ROBOLAB_ROOT_DIR}/logs/atom01_flat/policy.pt',
-                        help='Run to load from.')
+    parser.add_argument('--load_model', type=str, help='Run to load from.')
     parser.add_argument('--terrain', action='store_true', help='terrain or plane')
     parser.add_argument('--headless', action='store_true',
                       help='Run without GUI and save video')
@@ -310,9 +309,9 @@ if __name__ == '__main__':
 
         class sim_config:
             if args.terrain:
-                mujoco_model_path = f'{ROBOLAB_ROOT_DIR}/robolab/assets/roboparty/atom/mjcf/atom01.xml'
+                mujoco_model_path = f'{ISAAC_DATA_DIR}/robots/roboparty/atom01/mjcf/atom01_terrain.xml'
             else:
-                mujoco_model_path = f'{ROBOLAB_ROOT_DIR}/robolab/assets/roboparty/atom/mjcf/atom01.xml'
+                mujoco_model_path = f'{ISAAC_DATA_DIR}/robots/roboparty/atom01/mjcf/atom01.xml'
             sim_duration = 10.0
             dt = 0.001
             decimation = 20
