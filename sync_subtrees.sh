@@ -42,11 +42,24 @@ ensure_remote() {
     fi
 }
 
+# 自动检测远程仓库的默认分支
+detect_default_branch() {
+    local remote_name="$1"
+    # 优先尝试 main，然后 master
+    if git ls-remote --heads "$remote_name" | grep -q "refs/heads/main"; then
+        echo "main"
+    elif git ls-remote --heads "$remote_name" | grep -q "refs/heads/master"; then
+        echo "master"
+    else
+        echo ""
+    fi
+}
+
 # Subtree 同步辅助函数
 sync_subtree() {
     local prefix="$1"
     local remote_name="$2"
-    local branch="${3:-main}"
+    local branch="${3:-auto}"
 
     echo ""
     echo "同步 $prefix..."
@@ -55,6 +68,16 @@ sync_subtree() {
     if ! git remote | grep -q "^${remote_name}$"; then
         echo "  ⚠ remote $remote_name 不存在，跳过"
         return 1
+    fi
+
+    # 自动检测分支
+    if [ "$branch" = "auto" ]; then
+        branch=$(detect_default_branch "$remote_name")
+        if [ -z "$branch" ]; then
+            echo "  ⚠ 无法检测远程仓库的默认分支"
+            return 1
+        fi
+        echo "  检测到默认分支: $branch"
     fi
 
     # 检查目录是否为空或不存在
@@ -68,7 +91,7 @@ sync_subtree() {
         if [ "$need_add" = true ]; then
             # 首次添加
             if git subtree add --prefix="$prefix" "$remote_name" "$branch" >/dev/null 2>&1; then
-                echo "  ✓ $prefix 首次添加成功"
+                echo "  ✓ $prefix 添加成功"
                 return 0
             else
                 echo "  ⚠ $prefix 添加失败"
@@ -127,14 +150,8 @@ sync_submodules_as_subtrees() {
                     # 添加 remote
                     ensure_remote "$submodule_name" "$current_url"
 
-                    # 尝试获取远程仓库的默认分支
-                    local submodule_branch="main"
-                    if git ls-remote --heads "$submodule_name" | grep -q "refs/heads/master"; then
-                        submodule_branch="master"
-                    fi
-
-                    # 同步 subtree
-                    sync_subtree "$full_path" "$submodule_name" "$submodule_branch"
+                    # 同步 subtree（自动检测分支）
+                    sync_subtree "$full_path" "$submodule_name" "auto"
 
                     current_path=""
                     current_url=""
