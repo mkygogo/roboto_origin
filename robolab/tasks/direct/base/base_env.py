@@ -287,18 +287,22 @@ class BaseEnv(DirectRLEnv):
     
     def _get_dones(self):
         net_contact_forces = self.contact_sensor.data.net_forces_w_history
-
-        terminated_buf = torch.any(
-            torch.max(
-                torch.norm(
-                    net_contact_forces[:, :, self.termination_contact_cfg.body_ids],
-                    dim=-1,
-                ),
+        if self.cfg.robot.terminate_contacts_body_names is not None:
+            terminated_buf = torch.any(
+                torch.max(
+                    torch.norm(
+                        net_contact_forces[:, :, self.termination_contact_cfg.body_ids],
+                        dim=-1,
+                    ),
+                    dim=1,
+                )[0]
+                > 1.0,
                 dim=1,
-            )[0]
-            > 1.0,
-            dim=1,
-        )
+            )
+        if self.cfg.robot.terminate_base_orientation is not None:
+            terminated_buf |= torch.acos(-self.robot.data.projected_gravity_b[:, 2]).abs() > self.cfg.robot.terminate_base_orientation
+        if self.cfg.robot.terminate_base_height is not None:
+            terminated_buf |= self.robot.data.root_pos_w[:, 2] < self.cfg.robot.terminate_base_height
         time_out_buf = self.episode_length_buf >= self.episode_length
         return terminated_buf, time_out_buf
 
